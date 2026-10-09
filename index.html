@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Redirigiendo…</title>
+
+  <style>
+    /* ============================================================
+       ESTILOS (embebidos, sin dependencias externas)
+       ============================================================ */
+    :root {
+      --fondo: #eef2f6;
+      --tarjeta: #ffffff;
+      --tinta: #14213d;
+      --tinta-suave: #5b6b82;
+      --borde: #d5dde7;
+      --acento: #0f766e;
+      --acento-hover: #0b5e58;
+      --error: #b42318;
+      --ok: #0f766e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fondo: #0f1724; --tarjeta: #18233a; --tinta: #e8eef7;
+        --tinta-suave: #9aa9bf; --borde: #2c3a55; --acento: #2dd4bf;
+        --acento-hover: #5eead4; --error: #f97066; --ok: #2dd4bf;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.25rem; background: var(--fondo); color: var(--tinta);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .oculto { display: none !important; }
+
+    /* Pantalla de carga */
+    #vista-carga { text-align: center; }
+    .spinner {
+      width: 52px; height: 52px; margin: 0 auto 1.25rem;
+      border: 4px solid var(--borde); border-top-color: var(--acento);
+      border-radius: 50%; animation: girar 0.8s linear infinite;
+    }
+    @keyframes girar { to { transform: rotate(360deg); } }
+    #vista-carga p { margin: 0; font-size: 1.1rem; color: var(--tinta-suave); }
+
+    /* Panel de administración */
+    #vista-admin {
+      width: 100%; max-width: 440px; padding: 1.75rem;
+      background: var(--tarjeta); border: 1px solid var(--borde);
+      border-radius: 14px; box-shadow: 0 8px 28px rgba(20, 33, 61, 0.08);
+    }
+    #vista-admin h1 { margin: 0 0 0.25rem; font-size: 1.35rem; }
+    #vista-admin .sub { margin: 0 0 1.5rem; color: var(--tinta-suave); font-size: 0.95rem; }
+    label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; font-weight: 600; }
+    input {
+      width: 100%; margin-bottom: 1.1rem; padding: 0.7rem 0.85rem;
+      font: inherit; color: var(--tinta); background: var(--fondo);
+      border: 1px solid var(--borde); border-radius: 8px;
+    }
+    input:focus-visible, button:focus-visible {
+      outline: 3px solid var(--acento); outline-offset: 2px;
+    }
+    button {
+      width: 100%; padding: 0.8rem 1rem; font: inherit; font-weight: 600;
+      color: #ffffff; background: var(--acento); border: 0;
+      border-radius: 8px; cursor: pointer;
+    }
+    @media (prefers-color-scheme: dark) { button { color: #06201d; } }
+    button:hover { background: var(--acento-hover); }
+    button[disabled] { opacity: 0.6; cursor: wait; }
+    #mensaje { min-height: 1.4rem; margin: 1rem 0 0; font-size: 0.92rem; }
+    #mensaje.error { color: var(--error); }
+    #mensaje.ok    { color: var(--ok); }
+    .actual {
+      margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--borde);
+      font-size: 0.9rem; color: var(--tinta-suave); word-break: break-all;
+    }
+    .actual strong { color: var(--tinta); }
+  </style>
+</head>
+
+<body>
+
+  <!-- VISTA 1 · MODO USUARIO: spinner + redirección -->
+  <main id="vista-carga" role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <p>Redirigiendo…</p>
+  </main>
+
+  <!-- VISTA 2 · MODO ADMIN: ?admin=true  (o #admin) -->
+  <main id="vista-admin" class="oculto">
+    <h1>Panel de administración</h1>
+    <p class="sub">Cambia a distancia el enlace de cada placa.</p>
+
+    <label for="clave">Contraseña de administrador</label>
+    <input id="clave" type="password" autocomplete="current-password" placeholder="••••••••">
+
+    <label for="codigo">Código de la placa</label>
+    <input id="codigo" type="text" autocomplete="off" autocapitalize="characters"
+           placeholder="PLACA-001">
+
+    <label for="destino">URL de destino</label>
+    <input id="destino" type="url" inputmode="url" autocomplete="off"
+           placeholder="https://instagram.com/tu-cliente">
+
+    <button id="guardar" type="button">Guardar cambios</button>
+    <p id="mensaje" role="alert"></p>
+
+    <div class="actual">Destino actual de esta placa: <strong id="actual">—</strong></div>
+  </main>
+
+  <script>
+    /* ============================================================
+       CONFIGURACIÓN: rellena estas dos líneas con los datos de tu
+       proyecto Supabase (Project Settings → API).
+       La "anon key" es pública por diseño; la seguridad la dan las
+       reglas del archivo supabase.sql.
+       ============================================================ */
+    const SUPABASE_URL  = "https://TU-PROYECTO.supabase.co";
+    const SUPABASE_ANON = "TU_ANON_KEY";
+
+    const URL_POR_DEFECTO = "https://www.google.com"; // Si no hay código o falla la consulta
+    const RETRASO_MS      = 1500;                     // Espera mínima antes de redirigir
+    const TIMEOUT_MS      = 4000;                     // Máximo esperando a Supabase
+
+    /* ============================================================
+       UTILIDADES
+       ============================================================ */
+
+    // Solo permite http/https (bloquea "javascript:" y similares).
+    function normalizarUrl(texto) {
+      let v = (texto || "").trim();
+      if (!v) return null;
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = "https://" + v;
+      try {
+        const u = new URL(v);
+        return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+      } catch (e) { return null; }
+    }
+
+    // Limpia el código de placa (letras, números, guiones).
+    function limpiarCodigo(c) {
+      return (c || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+    }
+
+    const CABECERAS = {
+      "apikey": SUPABASE_ANON,
+      "Authorization": "Bearer " + SUPABASE_ANON,
+      "Content-Type": "application/json"
+    };
+
+    // Consulta el destino de una placa. Devuelve la URL o null.
+    async function consultarDestino(codigo) {
+      if (!codigo) return null;
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+      try {
+        const r = await fetch(
+          SUPABASE_URL + "/rest/v1/redirecciones?select=url&codigo=eq." +
+          encodeURIComponent(codigo),
+          { headers: CABECERAS, signal: ctrl.signal }
+        );
+        if (!r.ok) return null;
+        const filas = await r.json();
+        return filas.length ? normalizarUrl(filas[0].url) : null;
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
+    /* ============================================================
+       ARRANQUE
+       ============================================================ */
+    const params  = new URLSearchParams(window.location.search);
+    const esAdmin = params.get("admin") === "true" || window.location.hash === "#admin";
+
+    if (esAdmin) iniciarAdmin(); else iniciarRedireccion();
+
+    /* ============================================================
+       MODO USUARIO: consulta el destino y redirige (mín. 1,5 s)
+       ============================================================ */
+    async function iniciarRedireccion() {
+      const codigo = limpiarCodigo(params.get("c"));
+      const espera = new Promise(r => setTimeout(r, RETRASO_MS));
+      const [destino] = await Promise.all([consultarDestino(codigo), espera]);
+      window.location.replace(destino || URL_POR_DEFECTO);
+    }
+
+    /* ============================================================
+       MODO ADMIN: guarda el destino en Supabase
+       ============================================================ */
+    function iniciarAdmin() {
+      document.title = "Administración";
+      document.getElementById("vista-carga").classList.add("oculto");
+      document.getElementById("vista-admin").classList.remove("oculto");
+
+      const campoClave   = document.getElementById("clave");
+      const campoCodigo  = document.getElementById("codigo");
+      const campoDestino = document.getElementById("destino");
+      const boton        = document.getElementById("guardar");
+      const mensaje      = document.getElementById("mensaje");
+      const actual       = document.getElementById("actual");
+
+      function avisar(texto, tipo) { mensaje.textContent = texto; mensaje.className = tipo || ""; }
+
+      // Al salir del campo "código", muestra el destino que tiene hoy esa placa
+      async function mostrarActual() {
+        const c = limpiarCodigo(campoCodigo.value);
+        if (!c) { actual.textContent = "—"; return; }
+        actual.textContent = "consultando…";
+        const u = await consultarDestino(c);
+        actual.textContent = u || "sin configurar (usa " + URL_POR_DEFECTO + ")";
+      }
+      campoCodigo.addEventListener("blur", mostrarActual);
+
+      async function guardar() {
+        const codigo = limpiarCodigo(campoCodigo.value);
+        const url    = normalizarUrl(campoDestino.value);
+
+        if (!campoClave.value) { avisar("Escribe la contraseña de administrador.", "error"); return campoClave.focus(); }
+        if (!codigo)           { avisar("Escribe el código de la placa, por ejemplo PLACA-001.", "error"); return campoCodigo.focus(); }
+        if (!url)              { avisar("Escribe una URL válida, por ejemplo https://instagram.com/tu-cliente", "error"); return campoDestino.focus(); }
+
+        boton.disabled = true;
+        avisar("Guardando…");
+        try {
+          // La contraseña se verifica en el servidor (función guardar_redireccion)
+          const r = await fetch(SUPABASE_URL + "/rest/v1/rpc/guardar_redireccion", {
+            method: "POST",
+            headers: CABECERAS,
+            body: JSON.stringify({ p_codigo: codigo, p_url: url, p_clave: campoClave.value })
+          });
+          if (r.ok) {
+            campoCodigo.value = codigo;
+            campoDestino.value = url;
+            avisar("Cambios guardados. Ya están activos en todos los dispositivos.", "ok");
+            mostrarActual();
+          } else {
+            const err = await r.json().catch(() => ({}));
+            const txt = (err.message || "") + " " + (err.hint || "");
+            avisar(/clave/i.test(txt) ? "Contraseña incorrecta." : "No se pudo guardar. Revisa la configuración de Supabase.", "error");
+          }
+        } catch (e) {
+          avisar("Sin conexión con el servidor. Inténtalo de nuevo.", "error");
+        } finally {
+          boton.disabled = false;
+        }
+      }
+
+      boton.addEventListener("click", guardar);
+      [campoClave, campoCodigo, campoDestino].forEach(c =>
+        c.addEventListener("keydown", ev => { if (ev.key === "Enter") guardar(); })
+      );
+    }
+  </script>
+</body>
+</html>
